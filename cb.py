@@ -10,9 +10,10 @@ import requests
 ENDPOINT = "https://api.pro.coinbase.com/products"
 # Possible granularity values that api supports: ["60", "300", "900", "3600", "21600", "86400"],
 # these are for ease of use during future programming
-GLABELS = {"1m": "60", "5m": "300", "15m": "900", "1h": "3600", "6h": "21600", "24h": "86400"}
+GRANULARITY_LABELS = {"1m": "60", "5m": "300", "15m": "900", "1h": "3600", "6h": "21600", "24h": "86400"}
 # Labels taken from https://docs.pro.coinbase.com/#get-historic-rates
-CANDLABELS = ["time", "low", "high", "open", "close", "volume"]
+CANDLE_LABELS = ["time", "low", "high", "open", "close", "volume"]
+
 
 def get_product(prod: str) -> json:
     ret = requests.get(ENDPOINT + f"/{prod}")
@@ -49,10 +50,10 @@ def get_last_24hours(prod: str) -> json:
 def set_granularity(granularity: str = None) -> str:
     # See global declarations above for explanation of glabels
     g = granularity
-    if granularity not in GLABELS.keys():
+    if granularity not in GRANULARITY_LABELS.keys():
         g = "3600"
     else:
-        g = GLABELS[granularity]
+        g = GRANULARITY_LABELS[granularity]
     return g
 
 
@@ -75,33 +76,48 @@ def get_candles(prod: str, start: datetime.date, end: datetime.date = None, gran
     # See global declarations above for explanation of glabels
     granularity = set_granularity(granularity)
     num_candles = get_num_candles(start, end, granularity)
-    df = pd.DataFrame(columns=CANDLABELS)
+    df = pd.DataFrame(columns=CANDLE_LABELS)
 
     while num_candles > 300:
-        end = start + datetime.timedelta(seconds=(int(granularity)*300))
+        end = start + datetime.timedelta(seconds=(int(granularity) * 300))
         params = {"start": start.isoformat(), "end": end.isoformat(), "granularity": granularity}
         r = requests.get(ENDPOINT + f"/{prod}/candles", params)
         if r.status_code != 200:
             print(f"HTML Error: {r.status_code}")
             raise ValueError
-        temp = pd.DataFrame(r.json(), columns=CANDLABELS)
+        temp = pd.DataFrame(r.json(), columns=CANDLE_LABELS)
         # Results are returned from API with the most recent results first, i.e. end date is 0 entry, so reversing the
         # temp frame puts data in order
         df = pd.concat([df, temp.iloc[::-1]])
         start = end
         num_candles -= 300
 
-    end = start + datetime.timedelta(seconds=(int(granularity)*num_candles))
+    end = start + datetime.timedelta(seconds=(int(granularity) * num_candles))
     params = {"start": start.isoformat(), "end": end.isoformat(), "granularity": granularity}
     r = requests.get(ENDPOINT + f"/{prod}/candles", params)
     if r.status_code != 200:
         print(f"HTML Error: {r.status_code}")
         raise ValueError
-    temp = pd.DataFrame(r.json(), columns=CANDLABELS)
+    temp = pd.DataFrame(r.json(), columns=CANDLE_LABELS)
     df = pd.concat([df, temp.iloc[::-1]])
     # Convert from sec since unix epoch (returned from API) to python datetime
     df["time"] = pd.to_datetime(df["time"], unit='s')
     return df
+
+
+def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) -> pd.DataFrame:
+    if cols is None:
+        cols = ["conv_return", "log_return"]
+    params = dict()
+    stats = ["min", "max", "std", "mean", "var", "skew", "kurt"]
+    MAX_MOMENTS = 4
+    if (moment > MAX_MOMENTS) or moment < 0:
+        print(f"Invalid moment = {moment}, enter an int from 0 to 4")
+        raise ValueError
+    stats = stats[:len(stats) + (moment - MAX_MOMENTS)]
+    for col in cols:
+        params[col] = stats
+    return df.agg(params)
 
 
 def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -111,6 +127,15 @@ def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
     """
     # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
     return df.assign(log_return=lambda x: np.log(x.close / (x.close.shift(-1))))
+
+
+def compute_conventional_returns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    :param df: Dataframe to be augmented, should follow CANDLE_LABELS
+    :return: Augmented dataframe with conventional returns based on closing prices
+    """
+    # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
+    return df.assign(conv_return=lambda x: (x.close - x.close.shift(-1)) / (x.close.shift(-1)))
 
 
 def get_crypto_pair_with_returns(prod1: str, prod2: str,
@@ -141,5 +166,7 @@ def plot_crypto_pair_returns(prod1: str, prod2: str,
 
 
 def main():
-    plot_crypto_pair_returns("BTC-USD", "ETH-USD", datetime.date(2021, 6, 1), granularity="1h")
-    #print(get_candles("BTC-USD", datetime.date(2021, 7, 1), granularity="1h"))
+    df = get_candles("BTC-USD", datetime.date(2021, 7, 1), granularity="1h")
+    df = compute_log_returns(df)
+    df = compute_conventional_returns(df)
+    print(compute_statistics(df))
