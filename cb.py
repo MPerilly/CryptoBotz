@@ -106,6 +106,13 @@ def get_candles(prod: str, start: datetime.date, end: datetime.date = None, gran
 
 
 def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) -> pd.DataFrame:
+    """
+    :param df: Pandas dataframe of data to have stats calculated
+    :param cols: List of string names referring to columns of df to perform analysis on, defaults to conventional and
+                 log return respectively
+    :param moment: Number of moments to calculate, defaults to 4
+    :return: Dataframe containing columns passed to cols of rows containing [min, max, std, (mean, variance, skew, kurtosis)]
+    """
     if cols is None:
         cols = ["conv_return", "log_return"]
     params = dict()
@@ -120,13 +127,32 @@ def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) ->
     return df.agg(params)
 
 
+def compute_correlation(u: pd.Series, v: pd.Series, method: str = "pearson") -> pd.DataFrame:
+    """
+    Intended to take in two Pandas Dataframe columns and return a 2x2 matrix of correlations between the columns
+    :param u: First column, pandas.Series
+    :param v: Second column, pandas.Series
+    :param method: String in [‘pearson’, ‘kendall’, ‘spearman’], can also be upgraded to incorporate callable, for
+    correlation between datasets only, not autocorrelation
+    :return: 2x2 Matrix of correlations between the columns and themselves
+    """
+    uu = u.autocorr()
+    uv = u.corr(v, method)
+    vu = v.corr(u, method)
+    vv = v.autocorr()
+    df = pd.DataFrame([[uu, uv],
+                       [vu, vv]],
+                      index=[f"{u.name}", f"{v.name}"], columns=[f"{u.name}", f"{v.name}"])
+    return df
+
+
 def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
     """
     :param df: Dataframe to be augmented, should follow CANDLABELS
     :return: Augmented dataframe with log returns based on closing prices
     """
     # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
-    return df.assign(log_return=lambda x: np.log(x.close / (x.close.shift(-1))))
+    return df.assign(log_return=lambda x: 100 * (np.log(x.close / (x.close.shift(-1)))))
 
 
 def compute_conventional_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -135,14 +161,14 @@ def compute_conventional_returns(df: pd.DataFrame) -> pd.DataFrame:
     :return: Augmented dataframe with conventional returns based on closing prices
     """
     # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
-    return df.assign(conv_return=lambda x: (x.close - x.close.shift(-1)) / (x.close.shift(-1)))
+    return df.assign(conv_return=lambda x: 100 * ((x.close - x.close.shift(-1)) / (x.close.shift(-1))))
 
 
 def get_crypto_pair_with_returns(prod1: str, prod2: str,
                                  start: datetime.date, end: datetime.date = None,
                                  granularity: str = None) -> pd.DataFrame:
-    df1 = compute_log_returns(get_candles(prod1, start, end, granularity))
-    df2 = compute_log_returns(get_candles(prod2, start, end, granularity))
+    df1 = compute_conventional_returns(compute_log_returns(get_candles(prod1, start, end, granularity)))
+    df2 = compute_conventional_returns(compute_log_returns(get_candles(prod2, start, end, granularity)))
     return pd.merge(df1, df2, on="time", suffixes=(f"_{prod1}", f"_{prod2}"))
 
 
@@ -154,7 +180,7 @@ def plot_crypto_pair_returns(prod1: str, prod2: str,
     # Create figure and subplot axis
     fig, ax = plt.subplots()
     # Plot DataFrame to subplot axis (ax)
-    dfm.plot(x="time", y=["log_return_BTC-USD", "log_return_ETH-USD"])
+    dfm.plot(x="time", y=[f"log_return_{prod1}", f"log_return_{prod2}"])
     # xtick format string
     date_fmt = '%d-%m-%y %H:%M:%S'
     # TODO: Look into set_major_formatter
@@ -165,8 +191,18 @@ def plot_crypto_pair_returns(prod1: str, prod2: str,
     plt.show()
 
 
+def plot_return_histogram(prod1: str,
+                          start: datetime.date, end: datetime.date = None,
+                          granularity: str = None):
+    # TODO: Implement visualization for statistical analysis
+    pass
+
+
 def main():
     df = get_candles("BTC-USD", datetime.date(2021, 7, 1), granularity="1h")
     df = compute_log_returns(df)
     df = compute_conventional_returns(df)
     print(compute_statistics(df))
+    df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2021, 7, 1), granularity="1h")
+    print(compute_correlation(df["log_return_BTC-USD"], df["log_return_ETH-USD"]))
+
