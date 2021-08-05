@@ -162,15 +162,16 @@ def compute_single_correlation(u: pd.Series, v: pd.Series, method: str = "pearso
 def compute_moving_correlation(df: pd.DataFrame, cols: [str], time_step: DateOffset = None,
                                granularity: str = "1d"):
     if time_step is None:
-        time_step = "50D"
+        time_step = "3D"
     if cols is None:
         print("Must specify columns to correlate")
         raise ValueError
     r = df[cols].rolling(time_step).corr()
     # TODO Assign column names to correlations dynamically
     # TODO Implement logic to return simplified dataframe for easier parsing
-    r.rename(columns={cols[0]: "corr1", cols[1]: "corr2"})
-    return df[cols].rolling(time_step).corr()
+    r = r.rename(columns={cols[0]: f"{cols[0]}_{time_step}_corr", cols[1]: f"{cols[1]}_{time_step}_corr"})
+    # df[cols].rolling(time_step).corr()
+    return r
 
 
 def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -226,13 +227,14 @@ def plot_return_histogram(prod1: str,
 
 
 def main():
-    df = get_candles("BTC-USD", datetime.date(2021, 7, 1), granularity="1h")
-    df = compute_log_returns(df)
-    df = compute_conventional_returns(df)
-    print(compute_statistics(df))
-    df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2021, 7, 1), granularity="1h")
+    #df = get_candles("BTC-USD", datetime.date(2020, 6, 1), granularity="1h")
+    #df = compute_log_returns(df)
+    #df = compute_conventional_returns(df)
+    #print(compute_statistics(df))
+    df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2020, 6, 1), granularity="1h")
     df = compute_moving_correlation(df, ["log_return_BTC-USD", "log_return_ETH-USD"])
     # https://pandas.pydata.org/docs/user_guide/advanced.html#advanced-xs
     pl = df.loc[(slice(None), "log_return_ETH-USD"), :]
-    pl.reset_index().plot(x="time", y="log_return_BTC-USD")
+    pl.reset_index().plot(x="time", y="log_return_BTC-USD_3D_corr")
+    plt.show()
 
