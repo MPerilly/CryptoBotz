@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdate
 import numpy as np
 import pandas as pd
+from pandas.tseries.offsets import DateOffset
 import requests
 
 ENDPOINT = "https://api.pro.coinbase.com/products"
@@ -102,7 +103,7 @@ def get_candles(prod: str, start: datetime.date, end: datetime.date = None, gran
     df = pd.concat([df, temp.iloc[::-1]])
     # Convert from sec since unix epoch (returned from API) to python datetime
     df["time"] = pd.to_datetime(df["time"], unit='s')
-    return df
+    return df.set_index("time")
 
 
 def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) -> pd.DataFrame:
@@ -127,7 +128,7 @@ def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) ->
     return df.agg(params)
 
 
-def compute_correlation(u: pd.Series, v: pd.Series, method: str = "pearson") -> pd.DataFrame:
+def compute_correlation_matrix(u: pd.Series, v: pd.Series, method: str = "pearson") -> pd.DataFrame:
     """
     Intended to take in two Pandas Dataframe columns and return a 2x2 matrix of correlations between the columns
     :param u: First column, pandas.Series
@@ -144,6 +145,32 @@ def compute_correlation(u: pd.Series, v: pd.Series, method: str = "pearson") -> 
                        [vu, vv]],
                       index=[f"{u.name}", f"{v.name}"], columns=[f"{u.name}", f"{v.name}"])
     return df
+
+
+def compute_single_correlation(u: pd.Series, v: pd.Series, method: str = "pearson") -> float:
+    """
+    Intended to take in two Pandas Dataframe columns and return a the correlation of the columns
+    :param u: First column, pandas.Series
+    :param v: Second column, pandas.Series
+    :param method: String in [‘pearson’, ‘kendall’, ‘spearman’], can also be upgraded to incorporate callable, for
+    correlation between datasets only, not autocorrelation
+    :return: Float, the correlation between the two columns
+    """
+    return u.corr(v, method)
+
+
+def compute_moving_correlation(df: pd.DataFrame, cols: [str], time_step: DateOffset = None,
+                               granularity: str = "1d"):
+    if time_step is None:
+        time_step = "50D"
+    if cols is None:
+        print("Must specify columns to correlate")
+        raise ValueError
+    r = df[cols].rolling(time_step).corr()
+    # TODO Assign column names to correlations dynamically
+    # TODO Implement logic to return simplified dataframe for easier parsing
+    r.rename(columns={cols[0]: "corr1", cols[1]: "corr2"})
+    return df[cols].rolling(time_step).corr()
 
 
 def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -204,5 +231,8 @@ def main():
     df = compute_conventional_returns(df)
     print(compute_statistics(df))
     df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2021, 7, 1), granularity="1h")
-    print(compute_correlation(df["log_return_BTC-USD"], df["log_return_ETH-USD"]))
+    df = compute_moving_correlation(df, ["log_return_BTC-USD", "log_return_ETH-USD"])
+    # https://pandas.pydata.org/docs/user_guide/advanced.html#advanced-xs
+    pl = df.loc[(slice(None), "log_return_ETH-USD"), :]
+    pl.reset_index().plot(x="time", y="log_return_BTC-USD")
 
