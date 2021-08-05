@@ -79,7 +79,7 @@ def get_candles(prod: str, start: datetime.date, end: datetime.date = None, gran
     num_candles = get_num_candles(start, end, granularity)
     df = pd.DataFrame(columns=CANDLE_LABELS)
 
-    while num_candles > 300:
+    while num_candles > 0:
         end = start + datetime.timedelta(seconds=(int(granularity) * 300))
         params = {"start": start.isoformat(), "end": end.isoformat(), "granularity": granularity}
         r = requests.get(ENDPOINT + f"/{prod}/candles", params)
@@ -93,14 +93,14 @@ def get_candles(prod: str, start: datetime.date, end: datetime.date = None, gran
         start = end
         num_candles -= 300
 
-    end = start + datetime.timedelta(seconds=(int(granularity) * num_candles))
-    params = {"start": start.isoformat(), "end": end.isoformat(), "granularity": granularity}
-    r = requests.get(ENDPOINT + f"/{prod}/candles", params)
-    if r.status_code != 200:
-        print(f"HTML Error: {r.status_code}")
-        raise ValueError
-    temp = pd.DataFrame(r.json(), columns=CANDLE_LABELS)
-    df = pd.concat([df, temp.iloc[::-1]])
+    # end = start + datetime.timedelta(seconds=(int(granularity) * num_candles))
+    # params = {"start": start.isoformat(), "end": end.isoformat(), "granularity": granularity}
+    # r = requests.get(ENDPOINT + f"/{prod}/candles", params)
+    # if r.status_code != 200:
+    #     print(f"HTML Error: {r.status_code}")
+    #     raise ValueError
+    # temp = pd.DataFrame(r.json(), columns=CANDLE_LABELS)
+    # df = pd.concat([df, temp.iloc[::-1]])
     # Convert from sec since unix epoch (returned from API) to python datetime
     df["time"] = pd.to_datetime(df["time"], unit='s')
     return df.set_index("time")
@@ -159,8 +159,7 @@ def compute_single_correlation(u: pd.Series, v: pd.Series, method: str = "pearso
     return u.corr(v, method)
 
 
-def compute_moving_correlation(df: pd.DataFrame, cols: [str], time_step: DateOffset = None,
-                               granularity: str = "1d"):
+def compute_moving_correlation(df: pd.DataFrame, cols: [str], time_step: str = None) -> pd.Series:
     if time_step is None:
         time_step = "3D"
     if cols is None:
@@ -168,9 +167,11 @@ def compute_moving_correlation(df: pd.DataFrame, cols: [str], time_step: DateOff
         raise ValueError
     r = df[cols].rolling(time_step).corr()
     # TODO Assign column names to correlations dynamically
-    # TODO Implement logic to return simplified dataframe for easier parsing
-    r = r.rename(columns={cols[0]: f"{cols[0]}_{time_step}_corr", cols[1]: f"{cols[1]}_{time_step}_corr"})
-    # df[cols].rolling(time_step).corr()
+    r = r.rename(columns={cols[0]: f"{cols[0]}_corr", cols[1]: f"{cols[1]}_corr"})
+    r = r.loc[(slice(None), f"{cols[0]}"), f"{cols[1]}_corr"]
+    r = r.reset_index()
+    r = r.drop(columns=["level_1"])
+    r = r.set_index("time")
     return r
 
 
@@ -180,35 +181,38 @@ def compute_log_returns(df: pd.DataFrame) -> pd.DataFrame:
     :return: Augmented dataframe with log returns based on closing prices
     """
     # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
-    return df.assign(log_return=lambda x: 100 * (np.log(x.close / (x.close.shift(-1)))))
+    df["log_ret"] = np.log(df.close) - np.log(df.close.shift(1))
+    return df
 
 
-def compute_conventional_returns(df: pd.DataFrame) -> pd.DataFrame:
+def compute_percent_returns(df: pd.DataFrame) -> pd.DataFrame:
     """
     :param df: Dataframe to be augmented, should follow CANDLE_LABELS
     :return: Augmented dataframe with conventional returns based on closing prices
     """
     # TODO: Implement parsing for returns based on different prices (open, high, low, etc.)
-    return df.assign(conv_return=lambda x: 100 * ((x.close - x.close.shift(-1)) / (x.close.shift(-1))))
+    df["pct_ret"] = df.close.pct_change()
+    return df
 
 
 def get_crypto_pair_with_returns(prod1: str, prod2: str,
                                  start: datetime.date, end: datetime.date = None,
                                  granularity: str = None) -> pd.DataFrame:
-    df1 = compute_conventional_returns(compute_log_returns(get_candles(prod1, start, end, granularity)))
-    df2 = compute_conventional_returns(compute_log_returns(get_candles(prod2, start, end, granularity)))
+    df1 = compute_percent_returns(compute_log_returns(get_candles(prod1, start, end, granularity)))
+    df2 = compute_percent_returns(compute_log_returns(get_candles(prod2, start, end, granularity)))
     return pd.merge(df1, df2, on="time", suffixes=(f"_{prod1}", f"_{prod2}"))
 
 
 def plot_crypto_pair_returns(prod1: str, prod2: str,
                              start: datetime.date, end: datetime.date = None,
                              granularity: str = None):
+    granularity = set_granularity(granularity)
     dfm = get_crypto_pair_with_returns(prod1, prod2, start, end, granularity)
     # https://stackoverflow.com/questions/23294197/plotting-chart-with-epoch-time-x-axis-using-matplotlib
     # Create figure and subplot axis
     fig, ax = plt.subplots()
     # Plot DataFrame to subplot axis (ax)
-    dfm.plot(x="time", y=[f"log_return_{prod1}", f"log_return_{prod2}"])
+    dfm.plot(y=[f"log_ret_{prod1}", f"log_ret_{prod2}"], use_index=True)
     # xtick format string
     date_fmt = '%d-%m-%y %H:%M:%S'
     # TODO: Look into set_major_formatter
@@ -219,6 +223,30 @@ def plot_crypto_pair_returns(prod1: str, prod2: str,
     plt.show()
 
 
+def plot_crypto_pair_correlation(prod1: str, prod2: str,
+                                 start: datetime.date, end: datetime.date = None,
+                                 granularity: str = None, window: str = None):
+    granularity = set_granularity(granularity)
+    dfm = get_crypto_pair_with_returns(prod1, prod2, start, end, granularity)
+    # TODO: Clean data properly from compute moving, multiindexing is a bitch
+    # TODO: Funtionalize getting a pair with correlations as opposed to just having it here in plot
+    dfm['log_ret_corr'] = compute_moving_correlation(dfm, [f"log_ret_{prod1}", f"log_ret_{prod2}"], window)[f"log_ret_{prod2}_corr"].values
+    dfm['log_ret_corr_mean'] = np.full(dfm.index.shape, dfm.log_ret_corr.mean())
+    # https://stackoverflow.com/questions/23294197/plotting-chart-with-epoch-time-x-axis-using-matplotlib
+    # Create figure and subplot axis
+    fig, ax = plt.subplots()
+    # Plot DataFrame to subplot axis (ax)
+    dfm.plot(y=["log_ret_corr", "log_ret_corr_mean"], use_index=True)
+    # xtick format string
+    date_fmt = '%d-%m-%y %H:%M:%S'
+    # TODO: Look into set_major_formatter
+    date_formatter = mdate.DateFormatter(date_fmt)
+    ax.xaxis.set_major_formatter(date_formatter)
+    # Automatically format dates, diagonally/daily
+    fig.autofmt_xdate()
+    plt.show()
+
+# plot_crypto_pair_correlation("BTC-USD", "ETH-USD", datetime.date(2021, 6, 1))
 def plot_return_histogram(prod1: str,
                           start: datetime.date, end: datetime.date = None,
                           granularity: str = None):
@@ -227,14 +255,15 @@ def plot_return_histogram(prod1: str,
 
 
 def main():
-    #df = get_candles("BTC-USD", datetime.date(2020, 6, 1), granularity="1h")
-    #df = compute_log_returns(df)
+    df = get_candles("BTC-USD", datetime.date(2021, 6, 1), granularity="1h")
+    print(compute_log_returns(df))
+    plot_crypto_pair_returns("BTC-USD", "ETH-USD", datetime.date(2021, 6, 1))
     #df = compute_conventional_returns(df)
     #print(compute_statistics(df))
-    df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2020, 6, 1), granularity="1h")
-    df = compute_moving_correlation(df, ["log_return_BTC-USD", "log_return_ETH-USD"])
+    #df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2020, 6, 1), granularity="1h")
+    #df = compute_moving_correlation(df, ["log_return_BTC-USD", "log_return_ETH-USD"])
     # https://pandas.pydata.org/docs/user_guide/advanced.html#advanced-xs
-    pl = df.loc[(slice(None), "log_return_ETH-USD"), :]
-    pl.reset_index().plot(x="time", y="log_return_BTC-USD_3D_corr")
-    plt.show()
+    #pl = df.loc[(slice(None), "log_return_ETH-USD"), :]
+    #pl.reset_index().plot(x="time", y="log_return_BTC-USD_3D_corr")
+    #plt.show()
 
