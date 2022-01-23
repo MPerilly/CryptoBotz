@@ -1,6 +1,5 @@
 import datetime
 import json
-import string
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdate
 import numpy as np
@@ -49,7 +48,7 @@ def get_last_24hours(prod: str) -> json:
 
 
 def set_granularity(granularity: str = None) -> str:
-    # See global declarations above for explanation of glabels
+    # See global declarations above for explanation of GRANULARITY_LABELS
     g = granularity
     if granularity not in GRANULARITY_LABELS.keys():
         g = "3600"
@@ -115,7 +114,7 @@ def compute_statistics(df: pd.DataFrame, cols: [str] = None, moment: int = 4) ->
     :return: Dataframe containing columns passed to cols of rows containing [min, max, std, (mean, variance, skew, kurtosis)]
     """
     if cols is None:
-        cols = ["conv_return", "log_return"]
+        cols = ["pct_ret", "log_ret"]
     params = dict()
     stats = ["min", "max", "std", "mean", "var", "skew", "kurt"]
     MAX_MOMENTS = 4
@@ -258,6 +257,7 @@ def main():
     df = get_candles("BTC-USD", datetime.date(2021, 6, 1), granularity="1h")
     print(compute_log_returns(df))
     plot_crypto_pair_returns("BTC-USD", "ETH-USD", datetime.date(2021, 6, 1))
+    plot_crypto_pair_correlation("BTC-USD", "ETH-USD", datetime.date(2021, 6, 1))
     #df = compute_conventional_returns(df)
     #print(compute_statistics(df))
     #df = get_crypto_pair_with_returns("BTC-USD", "ETH-USD", datetime.date(2020, 6, 1), granularity="1h")
